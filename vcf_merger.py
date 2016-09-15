@@ -3,7 +3,11 @@ from __future__ import print_function
 from Bio import SeqIO
 import vcf
 import os
+from itertools import tee
 
+'''
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	mass_auto_kar3_sorted.nodups.bam
+'''
 def get_vcf_readers(path):
     vcf_readers = []
     vcf_files = [i for i in os.listdir(path) if i.endswith('.vcf')]
@@ -26,15 +30,25 @@ def neighborhood(iterable):
 
 
 def walk_together(contig_name_len_gen, vcf_readers, shared_pos=4):
-    vcf_writer = vcf.Writer(open('merged_vcf_4.vcf', 'w+'), vcf_readers[0][1])
+    contig_name_len_gen, contig_name_len_gen_2 = tee(contig_name_len_gen)
+    #vcf_writer = vcf.Writer(open('merged_vcf_4.vcf', 'w+'), vcf_readers[0][1])
+    vcf_writer = open('merged_vcf_4_rewrite_2.vcf', 'w+')
+    for contig, seq_len in contig_name_len_gen_2:
+        vcf_writer.write("##contig=<ID={},length={}>\n".format(contig, seq_len))
+
+    line = '#CHROM\tPOS\tID\tREF\t{}\n'.format("\t".join([i for i,j in vcf_readers]))
+    vcf_writer.write(line)
+
     for prev, curr, nex in neighborhood(contig_name_len_gen):
 
         p_c, p_l = prev
         contig, seq_len = curr
         n_c, n_l = nex
-
-        int_ctg = int(contig[3:])
-
+	
+        try:
+            int_ctg = int(contig[3:])
+	except ValueError:
+            int_ctg = int(1)
         contig_variants = {"POSITIONS":{},
                            "RECORDS":{fn:{} for fn,rd in vcf_readers}}
 
@@ -42,8 +56,11 @@ def walk_together(contig_name_len_gen, vcf_readers, shared_pos=4):
         for file_name, vcf_reader in vcf_readers:
             in_contig = False
             for item in vcf_reader:
-                if int(item.CHROM[3:]) > int(int_ctg):
-                    break
+                try:
+                    if int(item.CHROM[3:]) > int(int_ctg):
+                        break
+                except ValueError:
+                    pass
                 if in_contig and item.CHROM != contig:
                     break
                 if item.CHROM == contig:
@@ -57,14 +74,21 @@ def walk_together(contig_name_len_gen, vcf_readers, shared_pos=4):
         for key in contig_variants['POSITIONS']:
             if contig_variants["POSITIONS"][key] >= shared_pos:
                 #print (contig, key, contig_variants["POSITIONS"][key])
-                alts = set()
+                alts = []
+                ref = None
                 for file_name, vcf_reader in vcf_readers:
                     if key in contig_variants["RECORDS"][file_name]:
-                        record = contig_variants["RECORDS"][file_name][key]
-                        for i in record.ALT:
-                            alts.add(str(i))
-                record.ALT = [vcf.model._Substitution(i) for i in alts]
-                vcf_writer.write_record(record)
+                        ref = contig_variants["RECORDS"][file_name][key].REF
+                if ref:
+                    for file_name, vcf_reader in vcf_readers:
+                        if key in contig_variants["RECORDS"][file_name]:
+                            record = contig_variants["RECORDS"][file_name][key]
+                            alts.append(",".join([str(i) for i in record.ALT]))
+                        else:
+                            alts.append(ref)
+
+                line = "{}\t{}\t{}\t{}\n".format(contig, key, str(record.REF), "\t".join([str(i) for i in alts]))
+                vcf_writer.write(line)
 
 
 def contig_name_len_gen(fasta_path):
